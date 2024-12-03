@@ -1,5 +1,6 @@
-### Basic Quadratic Bezier Drawer in C with SDL2
-##### Usage:
-Move the mouse to change the position of the Control Point of the curve.
-Right and Left clicks change the positions of the End Points
-##### How exciting
+## Basic Bezier Curve Drawing Thing in C with SDL2
+### Usage:
+#### `BezierGraphics <control_points>`
+
+where `control_points >= 3`
+### How exciting :D

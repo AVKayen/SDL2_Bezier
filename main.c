@@ -1,50 +1,47 @@
 #include <stdio.h>
 #include <SDL2/SDL.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
-#define STEPS 100
+#define STEPS 200
 
-int min(const int a, const int b) {
-    return a < b ? a : b;
+typedef SDL_FPoint point;
+
+void bezier(point *interpolated_points, const size_t n, const size_t steps) {
+    for (size_t i = 0; i < steps; i++) {
+        interpolated_points[n * steps + i].x +=
+            (interpolated_points[(n + 1) * steps + i].x - interpolated_points[n * steps + i].x) *
+            ((float32_t) i / (float32_t) steps);
+        interpolated_points[n * steps + i].y +=
+            (interpolated_points[(n + 1) * steps + i].y - interpolated_points[n * steps + i].y) *
+            ((float32_t) i / (float32_t) steps);
+    }
 }
 
-int max(const int a, const int b) {
-    return a > b ? a : b;
+void fillPoints(point *points, const point p, const size_t n, const size_t steps) {
+    for (size_t i = 0; i < steps; i++) {
+        points[n * steps + i] = p;
+    }
 }
 
-typedef SDL_Point point;
 
-typedef struct line {
-    int x1, y1, x2, y2;
-} line;
-
-line lineFromPoints(const point a, const point b) {
-    const line l = {a.x, a.y, b.x, b.y};
-    return l;
-}
-
-point getPointOnLine(const line l, const double percent, const double divisor) {
-    point p;
-    p.x = l.x1 + (int) ((double) (l.x2 - l.x1) * (percent / divisor));
-    p.y = l.y1 + (int) ((double) (l.y2 - l.y1) * (percent / divisor));
-    return p;
-}
-
-void drawLine(SDL_Renderer *renderer, const line l) {
-    SDL_RenderDrawLine(renderer, l.x1, l.y1, l.x2, l.y2);
-}
-
-void drawPoint(SDL_Renderer *renderer, const point p) {
-    SDL_RenderDrawPoint(renderer, p.x, p.y);
-}
-
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        printf("Usage: %s <control points>=3>\n", argv[0]);
+        return 1;
+    }
+    // atoi() is good enough in this use-case, disable warnings:
+    const int32_t control_points_count = atoi(argv[1]); // NOLINT(*-err34-c)
+    if (control_points_count < 3) {
+        printf("Usage: %s <control points>=3>\n", argv[0]);
+    }
+    srandom(time(nullptr));
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
         return 1;
     }
-
     SDL_Renderer *renderer;
     SDL_Window *window;
 
@@ -54,16 +51,23 @@ int main(void) {
         return 1;
     }
     SDL_RenderSetVSync(renderer, SDL_TRUE);
-    printf("Usage: Move the mouse to change the position of the Control Point of the curve."
-           "Right and Left clicks change the positions of the End Points\n");
-    point p1 = {0, 0};
-    point pw = {WINDOW_WIDTH/2, WINDOW_HEIGHT/2};
-    point p2 = {WINDOW_WIDTH, WINDOW_HEIGHT};
+    printf("Usage: Drag the points using your mouse");
 
     SDL_Event event;
-
-    int mouseX = 0, mouseY = 0;
-
+    point *control_points = malloc(sizeof(point) * control_points_count);
+    for (int32_t i = 0; i < control_points_count; i++) {
+        control_points[i].x = fabsf((float32_t) (random() % WINDOW_WIDTH));
+        control_points[i].y = fabsf((float32_t) (random() % WINDOW_HEIGHT));
+    }
+    point *points = malloc(sizeof(point) * control_points_count * STEPS);
+    if (points == NULL || control_points == NULL) {
+        printf("Failed to allocate memory for points.\n");
+        free(points);
+        free(control_points);
+        return 1;
+    }
+    int32_t mouseX = 0, mouseY = 0;
+    int32_t grabbed = -1;
     bool quit = false;
     while (!quit) {
         while (SDL_PollEvent(&event)) {
@@ -72,49 +76,62 @@ int main(void) {
             }
         }
 
-        // Get the mouse position. Right and Left click set the positions of end points.
-        // Moving the mouse sets the position of the control point
+        // Get the mouse position and state
         const Uint32 mouse_state = SDL_GetMouseState(&mouseX, &mouseY);
-        if (mouseX >= 0 && mouseY >= 0 && mouseX < WINDOW_WIDTH && mouseY < WINDOW_HEIGHT) {
-            pw.x = mouseX;
-            pw.y = mouseY;
-        }
-        if (mouse_state & SDL_BUTTON(SDL_BUTTON_LEFT)) {
-            p1.x = mouseX;
-            p1.y = mouseY;
-        }
-        if (mouse_state & SDL_BUTTON(SDL_BUTTON_RIGHT)) {
-            p2.x = mouseX;
-            p2.y = mouseY;
+
+        // If close to one of the control points and clicked, make it movable with left click of the mouse
+        if (grabbed != -1) {
+            control_points[grabbed].x = (float32_t) mouseX;
+            control_points[grabbed].y = (float32_t) mouseY;
+            if (!(mouse_state & SDL_BUTTON(SDL_BUTTON_LEFT))) {
+                grabbed = -1;
+            }
+        } else {
+            if (mouse_state & SDL_BUTTON(SDL_BUTTON_LEFT)) {
+                for (int32_t i = 0; i < control_points_count; i++) {
+                    if (fabsf(control_points[i].x - (float32_t) mouseX) < 30 && fabsf(
+                            control_points[i].y - (float32_t) mouseY) < 30) {
+                        grabbed = i;
+                        break;
+                    }
+                }
+            }
         }
 
-        // DRAW reset the canvas
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        // Reset the canvas
+        SDL_SetRenderDrawColor(renderer, 60, 56, 54, 0);
         SDL_RenderClear(renderer);
 
-        // Calculate the lines between end points and the control point
-        const line l1w = lineFromPoints(p1, pw);
-        const line lw2 = lineFromPoints(p2, pw);
+        // Fill the points array
+        for (int32_t i = 0; i < control_points_count; i++) {
+            fillPoints(points, control_points[i], i, STEPS);
+        }
 
         // DRAW the curve
-        SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-        point points[STEPS];
-        for (int i = 0; i < STEPS; i++) {
-            const point m1w = getPointOnLine(l1w, i, STEPS);
-            const point m2w = getPointOnLine(lw2, STEPS - i, STEPS);
-            const line middle = lineFromPoints(m1w, m2w);
-            points[i] = getPointOnLine(middle, i, STEPS);
+        SDL_SetRenderDrawColor(renderer, 204, 36, 29, 255);
+        for (int32_t i = control_points_count - 1; i > 0; i--) {
+            for (int j = 0; j < i; j++) {
+                bezier(points, j, STEPS);
+            }
         }
-        SDL_RenderDrawLines(renderer, points, STEPS);
+        SDL_RenderDrawLinesF(renderer, points, STEPS);
 
+        // Draw Control Lines
+        SDL_SetRenderDrawColor(renderer, 142, 192, 124, 0);
+        for (int32_t i = 0; i < control_points_count - 1; i++) {
+            SDL_RenderDrawLineF(renderer, control_points[i].x, control_points[i].y, control_points[i + 1].x,
+                                control_points[i + 1].y);
+        }
 
-        // DRAW control lines
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        drawLine(renderer, l1w);
-        drawLine(renderer, lw2);
+        // TODO: Draw points as circles
+        //  Color for Points SDL_SetRenderDrawColor(renderer, 69, 133, 136, 0);
 
         SDL_RenderPresent(renderer);
+        SDL_Delay(10);
     }
+
+    free(points);
+    free(control_points);
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
